@@ -1,0 +1,84 @@
+---
+title: "statsprojtwo"
+output: html_document
+date: "2023-03-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+install.packages('sgt')
+install.packages('ggplot2')
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+library(sgt)
+library(ggplot2)
+
+# These are all set to pre-determined values
+mu = 0
+sigma = 1
+p = 2
+sample_size = 20
+
+# List of lambdas and qs to vary
+lambdas = c(0,.99)
+qs = c(1, 5, 10, 50)
+ns = c(5,10,15,20,25)
+
+Data_Frame <- data.frame (
+  lambda = c(),
+  q = c(),
+  n = c(),
+  statistic = c()
+)
+
+lambda = .9
+q = Inf
+
+means = c()
+
+# For each lambda, q, and n value:
+for (lambda in lambdas) {
+  for (q in qs) {
+    for (n in ns) {
+      # Calculate sample_size sample means
+      means <- c()
+      for (i in 1:sample_size) {
+        data <- rsgt(n, mu = mu, sigma = sigma, lambda = lambda, p = 2, q = q)
+        means <- append(means, mean(data))
+      }
+      print(length(means))
+      stat <- shapiro.test(means)
+      Data_Frame <- rbind(Data_Frame, c(lambda, q, n, stat))
+      plot=qplot(x, data=data, geom="histogram") 
+      name <- sprintf("%s_%s_%s.pdf", lambda, q, n)
+      ggsave(plot,file=name)
+    }
+  }
+}
+
+#for (i in 1:5) {
+#  data <- rsgt(n, mu = mu, sigma = sigma, lambda = lambda, p = 2, q = q)
+#  # Calculate the sample mean
+#  m <- mean(data)
+#  means <- append(means, m)
+#}
+
+shapiro.test(means)
+hist(means)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
