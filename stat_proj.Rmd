@@ -8,48 +8,58 @@ date: "2023-03-19"
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+This block just installs the necessary packages. Only run it once, when you first start the environment.
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
+```{r cars, eval=FALSE}
+# If necessary, install packages
 install.packages('sgt')
 install.packages('ggplot2')
+install.packages("Dict")
 ```
 
-## Including Plots
+## Hyperparameters
 
-You can also embed plots, for example:
+Here we set each value that we will consider for our SGT distributions.
 
-```{r pressure, echo=FALSE}
+```{r}
 library(sgt)
 library(ggplot2)
+library(Dict)
+```
+
+```{r}
 
 # These are all set to pre-determined values
 mu = 0
 sigma = 1
 p = 2
-sample_size = 20
+sample_size = 5000
 
 # List of lambdas and qs to vary
-lambdas = c(0,.99)
-qs = c(1, 5, 10, 50)
-ns = c(5,10,15,20,25)
+lambdas = c(0, .1, .5, .99)
+qs = c(.5, 2, 10, 100)
+ns = seq(1, 30, 1)
 
-Data_Frame <- data.frame (
-  lambda = c(),
-  q = c(),
-  n = c(),
-  statistic = c()
+# Stores the S-W statistic for each choice of parameters for each n.
+df <- data.frame (
+  lambda = c(0),
+  q = c(0),
+  n = c(0),
+  W = c(0),
+  p_val = c(0)
 )
 
-lambda = .9
-q = Inf
+# Stores the means for each run with a key of the form "[lambda]_[q]_[n]" (for lambda, the 0 is included, so do '0.99', not '.99')
+means_dict = Dict$new(Test = 1:5000)
+```
 
-means = c()
+## Simulation Code
 
+This code is used to run the simulation. This will be the longest block, so only run it when you need to!
+
+Otherwise, simply load the dataframe clt_data.csv (the block below this one).
+
+```{r pressure, echo=FALSE, eval=FALSE}
 # For each lambda, q, and n value:
 for (lambda in lambdas) {
   for (q in qs) {
@@ -57,28 +67,51 @@ for (lambda in lambdas) {
       # Calculate sample_size sample means
       means <- c()
       for (i in 1:sample_size) {
-        data <- rsgt(n, mu = mu, sigma = sigma, lambda = lambda, p = 2, q = q)
+        data <- rsgt(n, mu = mu, sigma = sigma, lambda = lambda, p = 2, q = q, mean.cent = FALSE, var.adj = FALSE)
         means <- append(means, mean(data))
       }
-      print(length(means))
+      name <- sprintf("%s_%s_%s", lambda, q, n)
+      means_dict[name] <- means
       stat <- shapiro.test(means)
-      Data_Frame <- rbind(Data_Frame, c(lambda, q, n, stat))
-      plot=qplot(x, data=data, geom="histogram") 
-      name <- sprintf("%s_%s_%s.pdf", lambda, q, n)
-      ggsave(plot,file=name)
+      df[nrow(df) + 1,] <- c(lambda, q, n, stat[1], stat[2])
+      
+      # plot= ggplot() + geom_histogram(aes(means), bins = 20)
+      # name <- sprintf("%s_%s_%s.pdf", lambda, q, n)
+      # ggsave(plot,file=name)
     }
   }
 }
-
-#for (i in 1:5) {
-#  data <- rsgt(n, mu = mu, sigma = sigma, lambda = lambda, p = 2, q = q)
-#  # Calculate the sample mean
-#  m <- mean(data)
-#  means <- append(means, m)
-#}
-
-shapiro.test(means)
-hist(means)
 ```
+
+```{r}
+df = read.csv('clt_data.csv')
+```
+
+
+```{r}
+qs_now <- c(2, 10, 100)
+i = 1
+
+colors <- c("red", "blue", "green", "yellow", "purple", "orange", "brown", "black")
+
+leg_names = c("W = .95")
+
+plot(ns, rep(c(.95), times=length(ns)), lty=i, ylim=c(.85,1), col=colors[i])
+lines(ns, rep(c(.95), times=length(ns)), lty=i, col=colors[i])
+
+i <- i + 1
+for (lambda in lambdas) {
+  for (q in qs_now) {
+    df_now <- df[df$q == q & df$lambda == lambda, ]
+    #points(df_now$n, df_now$W, pch="*")
+    lines(df_now$n, df_now$W, lty=i, col=colors[i])
+    leg_names <- append(leg_names, sprintf("q = %s, lambda = %s", q, lambda))
+    i <- i + 1
+  }
+}
+legend("bottomright", legend=leg_names,
+       col=colors, lty=1:i, cex=0.8)
+```
+
 
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
