@@ -1,0 +1,138 @@
+---
+title: "Stat139_Presentation"
+---
+title: "statsprojtwo"
+output: html_document
+date: "2023-03-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This block just installs the necessary packages. Only run it once, when you first start the environment.
+
+```{r cars, eval=FALSE}
+# If necessary, install packages
+install.packages('sgt')
+install.packages('ggplot2')
+install.packages("Dict")
+install.packages("gridExtra")
+install.packages("moments")
+```
+
+## Hyperparameters
+
+Here we set each value that we will consider for our SGT distributions.
+
+```{r}
+library(sgt)
+library(ggplot2)
+library(Dict)
+library(moments)
+library(gridExtra)
+```
+
+```{r}
+# These are all set to pre-determined values
+mu = 0
+sigma = 1
+p = 2
+sample_size = 5000
+# List of lambdas and qs to vary
+lambdas = c(0, .1, .5, .99)
+qs = c(.5, 2, 10, 100)
+ns = seq(1, 30, 1)
+# Stores the S-W statistic for each choice of parameters for each n.
+df <- data.frame (
+  lambda = c(0),
+  q = c(0),
+  n = c(0),
+  W = c(0),
+  p_val = c(0),
+  skewness = c(0),
+  kurt = c(0),
+  bias = c(0)
+)
+# Stores the means for each run with a key of the form "[lambda]_[q]_[n]" (for lambda, the 0 is included, so do '0.99', not '.99')
+means_dict = Dict$new(Test = 1:5000)
+```
+
+## Simulation Code
+
+This code is used to run the simulation. This will be the longest block, so only run it when you need to!
+
+Otherwise, simply load the dataframe clt_data.csv (the block below this one).
+
+```{r pressure, cache = TRUE}
+# For each lambda, q, and n value:
+for (lambda in lambdas) {
+  for (q in qs) {
+    for (n in ns) {
+      # Calculate sample_size sample means
+      means <- c()
+      for (i in 1:sample_size) {
+        data <- rsgt(n, mu = mu, sigma = sigma, lambda = lambda, p = 2, q = q, mean.cent = FALSE, var.adj = FALSE)
+        means <- append(means, mean(data))
+      }
+      
+      qq_plot <- qqnorm(means,  main = paste("Q-Q Plot of Simulated Averages with q = ", q, ", n = ", n, ", and lambda =", lambda))
+      qqline(means)
+      name <- sprintf("%s_%s_%s", lambda, q, n)
+      means_dict[name] <- means
+      stat <- shapiro.test(means)
+      skew <- skewness(means)
+      kurt <- kurtosis(means)
+      bias <- mean(means)
+      df[nrow(df) + 1,] <- c(lambda, q, n, stat[1], stat[2], skew, kurt, bias)
+      
+      # plot= ggplot() + geom_histogram(aes(means), bins = 20)
+      # name <- sprintf("%s_%s_%s.pdf", lambda, q, n)
+      # ggsave(plot,file=name)
+    }
+  }
+}
+```
+
+```{r}
+df
+```
+
+```{r, eval=FALSE}
+grid.arrange(qq_plots, nrow = 16)
+
+grid.newpage()
+n_plots <- length(qq_plots)
+for (i in 1:n_plots) {
+  grid.draw(qq_plots[i])
+  if (i %% 10 == 0) {
+    grid.newpage()
+  }
+}
+
+df
+```
+
+
+```{r}
+qs_now <- c(2, 10, 100)
+i = 1
+colors <- c("red", "blue", "green", "yellow", "purple", "orange", "brown", "black")
+leg_names = c("W = .95")
+plot(ns, rep(c(.95), times=length(ns)), lty=i, ylim=c(.85,1), col=colors[i])
+lines(ns, rep(c(.95), times=length(ns)), lty=i, col=colors[i])
+i <- i + 1
+for (lambda in lambdas) {
+  for (q in qs_now) {
+    df_now <- df[df$q == q & df$lambda == lambda, ]
+    #points(df_now$n, df_now$W, pch="*")
+    lines(df_now$n, df_now$W, lty=i, col=colors[i])
+    leg_names <- append(leg_names, sprintf("q = %s, lambda = %s", q, lambda))
+    i <- i + 1
+  }
+}
+legend("bottomright", legend=leg_names,
+       col=colors, lty=1:i, cex=0.8)
+```
+
+
