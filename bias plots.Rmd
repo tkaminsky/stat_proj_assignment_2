@@ -1,0 +1,30 @@
+---
+title: "bias plots"
+author: "Aissata Bah"
+date: "2023-03-29"
+output: pdf_document
+---
+
+
+```{r}
+final = final_clt_data_2
+
+#writes lambda values in a statement
+final$lamword = paste("lambda =", as.character(final$lambda))
+
+#factors q so that plot treats it as a categorical variable
+final$q1 = as.factor(final$q)
+
+#plotting bias vs n (grouped by lambda)
+ggplot(final[final$q > 0, ],aes(x=n,y=bias,group = q1, col=q1))+geom_line()+facet_wrap(~lamword) + xlab("Sample Size") + ylab("Empirical Bias") +  guides(color = guide_legend(title = "q values"))
+
+#factors lambda so that plot treats it as a categorical variable
+final$lam1 = as.factor(final$lambda)
+
+#writes q values in a statement
+final$qwords = paste("q =", as.character(final$q))
+
+#plotting bias vs n (grouped by q)
+ggplot(final,aes(x=n,y=bias,group = lam1, col=lam1))+geom_line()+facet_wrap(~qwords) + xlab("Sample Size") + ylab("Empirical Bias") +  guides(color = guide_legend(title = "lambda values")) + facet_grid(~factor(qwords, levels=c('q = 2', 'q = 10', 'q = 100')))
+
+```
