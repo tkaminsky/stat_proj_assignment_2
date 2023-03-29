@@ -15,6 +15,10 @@ This block just installs the necessary packages. Only run it once, when you firs
 install.packages('sgt')
 install.packages('ggplot2')
 install.packages("Dict")
+install.packages('tidyverse')
+install.packages("gginnards")
+install.packages("gridExtra")
+install.packages("moments")
 ```
 
 ## Hyperparameters
@@ -25,20 +29,39 @@ Here we set each value that we will consider for our SGT distributions.
 library(sgt)
 library(ggplot2)
 library(Dict)
+library(tidyverse)
+library(gginnards)
+library(gridExtra)
+library(moments)
 ```
 
-```{r}
+# The following code runs visualizations on our data using the original setting---that is, running our data on a single distribution of 5000 samples
 
+```{r}
 # These are all set to pre-determined values
+
+# A list of good colors for visualization (generated using chat-GPT :) )
+colors <- c('red',"#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf", "#a9a9a9", "#ff6361", "#58508d", "#bc5090","#ffca3a","#003f5c")
+
+# Toggle to TRUE if you want to rerun the simulation---otherwise, a csv is loaded
+run_sim = FALSE
+
+# The mean and variance of our distribution are held constant
 mu = 0
 sigma = 1
+# This impacts skew, along with q. We only vary q WLOG
 p = 2
+# The number of sample means to collect for each distribution
 sample_size = 5000
+
 
 # List of lambdas and qs to vary
 lambdas = c(0, .1, .5, .99)
-qs = c(.5, 2, 10, 100)
-ns = seq(1, 30, 1)
+qs = c(2, 10, 100)
+ns_first = seq(1, 30, 1)
+ns_ext = seq(35, 200, 10)
+# Captures more extreme values
+ns <- append(ns_first, ns_ext)
 
 # Stores the S-W statistic for each choice of parameters for each n.
 df <- data.frame (
@@ -46,72 +69,612 @@ df <- data.frame (
   q = c(0),
   n = c(0),
   W = c(0),
-  p_val = c(0)
+  p_val = c(0),
+  skewness = c(0),
+  kurt = c(0),
+  bias = c(0)
 )
 
 # Stores the means for each run with a key of the form "[lambda]_[q]_[n]" (for lambda, the 0 is included, so do '0.99', not '.99')
-means_dict = Dict$new(Test = 1:5000)
+#max_num = sample_size * rep_num
+#means_dict = Dict$new(Test = 1:max_num)
+
+set.seed(355718203)
 ```
+
 
 ## Simulation Code
 
 This code is used to run the simulation. This will be the longest block, so only run it when you need to!
 
-Otherwise, simply load the dataframe clt_data.csv (the block below this one).
+Otherwise, simply load the dataframe final_clt_data.csv (the block below this one).
 
-```{r pressure, echo=FALSE, eval=FALSE}
-# For each lambda, q, and n value:
-for (lambda in lambdas) {
-  for (q in qs) {
-    for (n in ns) {
-      # Calculate sample_size sample means
-      means <- c()
-      for (i in 1:sample_size) {
-        data <- rsgt(n, mu = mu, sigma = sigma, lambda = lambda, p = 2, q = q, mean.cent = FALSE, var.adj = FALSE)
-        means <- append(means, mean(data))
-      }
-      name <- sprintf("%s_%s_%s", lambda, q, n)
-      means_dict[name] <- means
-      stat <- shapiro.test(means)
-      df[nrow(df) + 1,] <- c(lambda, q, n, stat[1], stat[2])
-      
-      # plot= ggplot() + geom_histogram(aes(means), bins = 20)
-      # name <- sprintf("%s_%s_%s.pdf", lambda, q, n)
-      # ggsave(plot,file=name)
+```{r, echo=FALSE}
+if (run_sim) {
+  
+  for (n in ns) {
+    if (!dir.exists(sprintf("qq_plots/%s", n))) {
+      dir.create(sprintf("qq_plots/%s", n))
     }
   }
+  
+  # For each lambda, q, and n value:
+  for (lambda in lambdas) {
+    for (q in qs) {
+      for (n in ns) {
+        print(sprintf("q = %s, n = %s, lambda = %s", q, n, lambda))
+        
+        # Calculate sample_size sample means
+        means <- c()
+        for (i in 1:sample_size) {
+          data <- rsgt(n, mu = mu, sigma = sigma, lambda = lambda, p = 2, q = q, mean.cent = TRUE, var.adj = TRUE)
+          means <- append(means, mean(data))
+        }
+        
+        # Calculate all of the relevant statistics
+        stat <- shapiro.test(means)
+        skew <- skewness(means)
+        kurt <- kurtosis(means)
+        bias <- mean(means)
+        
+        # Append the statistics to a dataframe
+        df[nrow(df) + 1,] <- c(lambda, q, n, stat[1], stat[2], skew, kurt, bias)
+        
+        # Save a copy of the qq-plot to a folder
+        plot_name <- sprintf("Q-Q Plot of Simulated Averages with q = %s, n = %s, and lambda = %s", q, n, lambda)
+        plot <- ggplot(data.frame(means), aes(sample = means)) +
+            stat_qq() +
+            stat_qq_line() + 
+            ggtitle(plot_name) + theme_grey()
+        name <- sprintf("qq_plots/%s/%s_%s_%s.png", n, lambda, q, n)
+        ggsave(plot,file=name)
+      }
+    }
+  }
+  df <- df[df$n != 0, ]
+  write.csv(df, 'final_clt_data.csv')
+} else {
+  df <- read.csv("final_clt_data.csv")
+  df <- df[df$n != 0, ]
 }
 ```
 
-```{r}
-df = read.csv('clt_data.csv')
-```
+# Slide 4 Figures: Shapiro-Wilk Test Statistic Visualizations
 
+This code creates graphs for the S-W test vs sample size. We will use this created plot to visualize all of the subplots with more constraints.
 
 ```{r}
-qs_now <- c(2, 10, 100)
+# Some state variables because I'm bad at R
 i = 1
 
-colors <- c("red", "blue", "green", "yellow", "purple", "orange", "brown", "black")
+goal <- mean(df[df$lambda == 0 & df$q == 100, ]$W)
+goal <- .995
+y <- rep(c(goal), length(ns))
+df_vis <- data.frame(ns,y)
+colors_names = c(paste('W =', goal))
 
-leg_names = c("W = .95")
+# The lowest 7-value to
+y_min = min(df$W)
 
-plot(ns, rep(c(.95), times=length(ns)), lty=i, ylim=c(.85,1), col=colors[i])
-lines(ns, rep(c(.95), times=length(ns)), lty=i, col=colors[i])
-
+# Plot a red line with a "good" value of W
+plot <- ggplot() + geom_line(data = df_vis, aes(x=ns, y=y, color=colors_names[1]), linetype='dashed')
 i <- i + 1
+
+# Plots the W-statistic for every choice of q and lambda
 for (lambda in lambdas) {
-  for (q in qs_now) {
+  for (q in qs) {
     df_now <- df[df$q == q & df$lambda == lambda, ]
-    #points(df_now$n, df_now$W, pch="*")
-    lines(df_now$n, df_now$W, lty=i, col=colors[i])
-    leg_names <- append(leg_names, sprintf("q = %s, lambda = %s", q, lambda))
+    colors_names <- append(colors_names, sprintf("q = %s, lambda = %s", q, lambda))
+    plot <- plot + geom_line(data=df_now, aes(x=n, y=W, color=sprintf("q = %s, lambda = %s", q, lambda)), linewidth=1)
     i <- i + 1
   }
 }
-legend("bottomright", legend=leg_names,
-       col=colors, lty=1:i, cex=0.8)
+
+# Adds a title and a legend
+plot <- plot +
+        xlab("Sample Size") +
+        ylab("S-W Test Statistic") +
+        ggtitle("Shapiro-Wilk Test Statistic vs Sample Size") +
+        scale_colour_manual("", 
+                      breaks = colors_names,
+                      values = colors) + 
+        theme_grey() +
+        ylim(c(y_min, 1))
+
+plot_first <- plot + scale_x_continuous(limits = c(0,length(ns_first)))
+```
+
+# This function allows us to select specific subsets of our data to visualize---we use this to grab specific lines from our plot.
+
+```{r}
+get_subgraph <- function(in_plot, q_tograph = qs, lambda_tograph = lambdas) {
+  plot_new <- in_plot 
+  
+  i <- 2
+  is <- c()
+  for (lambda in lambdas) {
+    for (q in qs) {
+      if (!(q %in% q_tograph) | !(lambda %in% lambda_tograph)) {
+        is <- append(is, i)
+      }
+      i <- i + 1
+    }
+  }
+  is <- sort(is, decreasing=TRUE)
+  for (val in is) {
+    plot_new <- delete_layers(plot_new, idx=val, )
+  }
+  
+  if (length(is) == 0) {
+    layer <- plot_new$layers[1]
+    plot_new <- delete_layers(plot_new, idx=1)
+    plot_new <- append_layers(plot_new, layer, position='bottom')
+  }
+  return(plot_new)
+}
+```
+
+# Here are plots of the complete dataset, with every parametrization under study.
+
+```{r}
+# Visualize the plot and save it to the SW_results directory
+if (!dir.exists("SW_results")) {
+  dir.create("SW_results")
+}
+
+print(plot)
+suppressWarnings(print(plot_first))
+ggsave(plot, file="SW_results/SW_complete.png")
+suppressWarnings(ggsave(plot_first, file="SW_results/SW_first.png"))
 ```
 
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+## We see the curves when we hold q constant, varying only skew. 
+
+```{r}
+for (q in qs) {
+  q_subplot <- get_subgraph(plot, q_tograph=c(q))
+  print(q_subplot)
+  ggsave(q_subplot, file=sprintf("SW_results/q_%s.png", q))
+}
+```
+
+
+## Likewise, we hold lambda constant and vary q
+
+```{r}
+for (lambda in lambdas) {
+  lambda_subplot <- get_subgraph(plot, lambda_tograph=c(lambda))
+  print(lambda_subplot)
+  ggsave(lambda_subplot, file=sprintf("SW_results/lambda_%s.png", lambda))
+}
+```
+
+
+## And, finally, we do the same for the first 30 elements
+
+```{r}
+for (lambda in lambdas) {
+  lambda_subplot <- get_subgraph(plot_first, lambda_tograph=c(lambda))
+  suppressWarnings(print(lambda_subplot))
+  suppressWarnings(ggsave(lambda_subplot, file=sprintf("SW_results/lambda_%s_first.png", lambda)))
+}
+for (q in qs) {
+  q_subplot <- get_subgraph(plot_first, q_tograph=c(q))
+  suppressWarnings(print(q_subplot))
+  suppressWarnings(ggsave(q_subplot, file=sprintf("SW_results/q_%s_first.png", q)))
+}
+```
+
+
+# Determining minimum n for normality
+
+```{r}
+df_running_means <- data.frame(
+  q = c(0),
+  lambda = c(0),
+  n = c(0),
+  mean = c(0)
+)
+
+for (q in qs) {
+  for (lambda in lambdas) {
+  df_now <- df[df$q == q & df$lambda == lambda, ]
+    for (n in ns) {
+      n_now <- df_now[df_now$n >= n,]$W
+      mean_now <- mean(n_now)
+      df_running_means
+      df_running_means[nrow(df_running_means) + 1,] <- c(q, lambda, n, mean_now)
+    }
+  }
+}
+
+```
+
+
+
+```{r}
+# Some state variables because I'm bad at R
+i = 1
+df_running_means <- df_running_means[df_running_means$n != 0, ]
+goal <- mean(df_running_means[df_running_means$q == 100 & df_running_means$lambda == 0, ]$mean)
+goal <- .999
+print(goal)
+y <- rep(c(goal), length(ns))
+df_vis <- data.frame(ns,y)
+colors_names = c(paste('W =', goal))
+
+# The lowest 7-value to
+y_min = min(df_running_means$mean)
+print(y_min)
+
+# Plot a red line with a "good" value of W
+plot <- ggplot() + geom_line(data = df_vis, aes(x=ns, y=y, color=colors_names[1]), linetype='dashed')
+i <- i + 1
+
+# Plots the W-statistic for every choice of q and lambda
+for (lambda in lambdas) {
+  for (q in qs) {
+    df_now <- df_running_means[df_running_means$q == q & df_running_means$lambda == lambda, ]
+    colors_names <- append(colors_names, sprintf("q = %s, lambda = %s", q, lambda))
+    plot <- plot + geom_line(data=df_now, aes(x=n, y=mean, color=sprintf("q = %s, lambda = %s", q, lambda)), linewidth=1)
+    i <- i + 1
+  }
+}
+
+# Adds a title and a legend
+plot <- plot +
+        xlab("Sample Size") +
+        ylab("S-W Test Statistic") +
+        ggtitle("Shapiro-Wilk Test Statistic vs Sample Size") +
+        scale_colour_manual("", 
+                      breaks = colors_names,
+                      values = colors) + 
+        theme_grey() +
+        ylim(c(y_min, 1))
+
+plot_first <- plot + scale_x_continuous(limits = c(0,length(ns_first)))
+```
+
+```{r}
+print(plot)
+df_now <- df_running_means[df_running_means$q == 10 & df_running_means$lambda == 1, ]
+plot_2 <- ggplot() + geom_line(data=df_now, aes(x=n, y=mean, color=sprintf("q = %s, lambda = %s", 10, .1)), linewidth=1) + ylim(c(y_min, 1))
+print(plot_2)
+```
+
+```{r}
+get_hm <- function(tolerance = .9995){
+  df_opts <- df_running_means[df_running_means$mean >= tolerance, ]
+  head(df_opts)
+  
+  qs_hm <- c()
+  lambdas_hm <- c()
+  ns_hm <- c()
+  
+  for (q in qs) {
+    for (lambda in lambdas) {
+      df_now <- df_opts[df_opts$q == q & df_opts$lambda == lambda, ]
+      qs_hm <- append(qs_hm, q)
+      lambdas_hm <- append(lambdas_hm, lambda)
+      
+      if (length(df_now$n) == 0) {
+        ns_hm <- append(ns_hm, Inf)
+      } else {
+        ns_hm <- append(ns_hm, min(df_now$n))
+      }
+    }
+  }
+  df_hm <- data.frame(
+    qs_hm,
+    lambdas_hm,
+    ns_hm
+  )
+  df_hm["qs_hm"] <- as.factor(df_hm$qs_hm)
+  df_hm["lambdas_hm"] <- as.factor(df_hm$lambdas_hm)
+  
+  colnames(df_hm)[colnames(df_hm) == 'ns_hm'] = "N"
+  
+  return(df_hm)
+}
+get_hm_again <- function(tolerance = .9995){
+  df_opts <- df[df$W >= tolerance, ]
+  head(df_opts)
+  
+  qs_hm <- c()
+  lambdas_hm <- c()
+  ns_hm <- c()
+  
+  for (q in qs) {
+    for (lambda in lambdas) {
+      df_now <- df_opts[df_opts$q == q & df_opts$lambda == lambda, ]
+      qs_hm <- append(qs_hm, q)
+      lambdas_hm <- append(lambdas_hm, lambda)
+      
+      if (length(df_now$n) == 0) {
+        ns_hm <- append(ns_hm, Inf)
+      } else {
+        ns_hm <- append(ns_hm, min(df_now$n))
+      }
+    }
+  }
+  df_hm <- data.frame(
+    qs_hm,
+    lambdas_hm,
+    ns_hm
+  )
+  df_hm["qs_hm"] <- as.factor(df_hm$qs_hm)
+  df_hm["lambdas_hm"] <- as.factor(df_hm$lambdas_hm)
+  
+  colnames(df_hm)[colnames(df_hm) == 'ns_hm'] = "N"
+  
+  return(df_hm)
+}
+```
+
+```{r}
+df_hm_precise <- get_hm_again(tolerance=.9995)
+head(df_hm_precise)
+plot <- ggplot(df_hm_precise,                                # Draw heatmap-like plot
+       aes(qs_hm, lambdas_hm, fill = N)) +
+  geom_tile() + ggtitle("Iterations Until Approximately Normal, W = .9995") +
+  xlab("Kurtosis (q)") + ylab("Skewness (lambda)") +
+  theme_grey() +
+    geom_text(aes(label=N), color="white", size=7)
+
+ggsave(plot, file="heatmaps/high_precision.png")
+```
+
+```{r}
+df_hm_precise <- get_hm_again(tolerance=.999)
+head(df_hm_precise)
+plot <- ggplot(df_hm_precise,                                # Draw heatmap-like plot
+       aes(qs_hm, lambdas_hm, fill = N)) +
+  geom_tile() + ggtitle("Iterations Until Approximately Normal, W = .999") +
+  xlab("Kurtosis (q)") + ylab("Skewness (lambda)") +
+  theme_grey() +
+    geom_text(aes(label=N), color="white", size=7)
+
+ggsave(plot, file="heatmaps/med_precision.png")
+
+df_hm_precise <- get_hm_again(tolerance=.995)
+head(df_hm_precise)
+plot <- ggplot(df_hm_precise,                                # Draw heatmap-like plot
+       aes(qs_hm, lambdas_hm, fill = N)) +
+  geom_tile() + ggtitle("Iterations Until Approximately Normal, W = .995") +
+  xlab("Kurtosis (q)") + ylab("Skewness (lambda)") +
+  theme_grey() +
+    geom_text(aes(label=N), color="white", size=7)
+
+ggsave(plot, file="heatmaps/low_precision.png")
+```
+
+## Experiment 2: Coverage of 95% confidence intervals
+
+```{r, eval=FALSE}
+# These are all set to pre-determined values
+
+# Toggle to TRUE if you want to rerun the simulation---otherwise, a csv is loaded
+run_sim = FALSE
+
+# The mean and variance of our distribution are held constant
+mu = 0
+sigma = 1
+# This impacts skew, along with q. We only vary q WLOG
+p = 2
+# The number of sample means to collect for each distribution
+sample_size = 20
+# The number of times to perform the S-W test on our data
+rep_num = 500
+
+# List of lambdas and qs to vary
+lambdas_c = c(0, .5, .99)
+qs_c = c(2, 10, 100) 
+ns_first_c <- seq(1,9, 1)
+ns_end_c = seq(10, 500, 10)
+ns_c <- append(ns_first_c, ns_end_c)
+
+# Stores the S-W statistic for each choice of parameters for each n.
+df_coverage <- data.frame (
+  lambda = c(0),
+  q = c(0),
+  n = c(0),
+  pos = c(0)
+)
+
+# Stores the means for each run with a key of the form "[lambda]_[q]_[n]" (for lambda, the 0 is included, so do '0.99', not '.99')
+max_num = sample_size * rep_num
+
+set.seed(355718203)
+```
+
+```{r pressure, echo=FALSE, eval=FALSE}
+if (run_sim) {
+  # For each lambda, q, and n value:
+  for (lambda in lambdas_c) {
+    for (q in qs_c) {
+      for (n in ns_c) {
+        count_pos <- 0
+        print(sprintf("q=%s, lambda=%s,n=%s", q, lambda, n))
+        
+        for (j in 1:rep_num) {
+          # Calculate sample_size sample means
+          means <- c()
+          for (i in 1:sample_size) {
+            data <- rsgt(n, mu = mu, sigma = sigma, lambda = lambda, p = 2, q = q, mean.cent = TRUE, var.adj = TRUE)
+            means <- append(means, mean(data))
+          }
+          # name <- sprintf("%s_%s_%s", lambda, q, n)
+          # means_dict[name] <- means
+          stat <- shapiro.test(means)
+          if (stat[2] > 0.05) {
+            count_pos <- count_pos + 1
+          }
+        }
+        df_coverage[nrow(df_coverage) + 1,] <- c(lambda, q, n, count_pos)
+      }
+    }
+  }
+  write.csv(df_coverage, file="coverage_final_data.csv")
+} else {
+  df_coverage <- read.csv("coverage_final_data.csv")
+  df_coverage["pos"] <- df_coverage["pos"] / rep_num
+}
+```
+
+This code creates graphs for the %-coverage of a 95% confidence interval, the experiment 2 criterion.
+
+A lot of this code is just copied from above---work smarter, not harder.
+
+```{r}
+# Some state variables because I'm bad at R
+i = 1
+
+goal <- .95
+y <- rep(c(goal), length(ns))
+df_vis <- data.frame(ns,y)
+colors_names = c("95% Retained")
+
+# The lowest 7-value to
+y_min = min(df$W)
+
+# Plot a red line with a "good" value of W
+plot <- ggplot() + geom_line(data = df_vis, aes(x=ns, y=y, color=colors_names[1]), linetype='dashed')
+i <- i + 1
+
+# Plots the W-statistic for every choice of q and lambda
+for (lambda in lambdas_c) {
+  for (q in qs_c) {
+    df_now <- df_coverage[df_coverage$q == q & df_coverage$lambda == lambda, ]
+    
+    colors_names <- append(colors_names, sprintf("q = %s, lambda = %s", q, lambda))
+    plot <- plot + geom_line(data=df_now, aes(x=n, y=pos, color=sprintf("q = %s, lambda = %s", q, lambda)), linewidth=1)
+    i <- i + 1
+  }
+}
+
+# Adds a title and a legend
+plot <- plot +
+        xlab("Sample Size") +
+        ylab("Percentage of Retained Null Hypothoses") +
+        ggtitle("Shapiro-Wilk Test Coverage vs Sample Size") +
+        scale_colour_manual("", 
+                      breaks = colors_names,
+                      values = colors) + 
+        theme_grey() +
+        ylim(c(y_min, 1))
+
+plot_first <- plot + scale_x_continuous(limits = c(0,length(ns_first)))
+```
+
+```{r}
+print(plot)
+```
+
+```{r}
+df_running_means <- data.frame(
+  q = c(0),
+  lambda = c(0),
+  n = c(0),
+  mean = c(0)
+)
+
+for (q in qs_c) {
+  for (lambda in lambdas_c) {
+  df_now <- df_coverage[df_coverage$q == q & df_coverage$lambda == lambda, ]
+    for (n in ns_c) {
+      n_now <- df_now[df_now$n >= n,]$pos
+      mean_now <- mean(n_now)
+      if (is.nan(mean_now)) {
+        print("FAIL")
+        print(q)
+        print(lambda)
+        print(n)
+      }
+      df_running_means[nrow(df_running_means) + 1,] <- c(q, lambda, n, mean_now)
+    }
+  }
+}
+
+```
+
+```{r}
+# Some state variables because I'm bad at R
+i = 1
+df_running_means <- df_running_means[df_running_means$n != 0, ]
+goal <- mean(df_running_means[df_running_means$q == 100 & df_running_means$lambda == 0, ]$mean) *
+print(goal)
+y <- rep(c(goal), length(ns))
+df_vis <- data.frame(ns,y)
+colors_names = c(paste('W =', goal))
+
+# The lowest 7-value to
+y_min = min(df_running_means$mean)
+
+# Plot a red line with a "good" value of W
+plot <- ggplot() + geom_line(data = df_vis, aes(x=ns, y=y, color=colors_names[1]), linetype='dashed')
+i <- i + 1
+
+# Plots the W-statistic for every choice of q and lambda
+for (lambda in lambdas_c) {
+  for (q in qs_c) {
+    df_now <- df_running_means[df_running_means$q == q & df_running_means$lambda == lambda, ]
+    colors_names <- append(colors_names, sprintf("q = %s, lambda = %s", q, lambda))
+    plot <- plot + geom_line(data=df_now, aes(x=n, y=mean, color=sprintf("q = %s, lambda = %s", q, lambda)), linewidth=1)
+    i <- i + 1
+  }
+}
+
+# Adds a title and a legend
+plot <- plot +
+        xlab("Sample Size") +
+        ylab("S-W Test Statistic") +
+        ggtitle("Shapiro-Wilk Test Statistic vs Sample Size") +
+        scale_colour_manual("", 
+                      breaks = colors_names,
+                      values = colors) + 
+        theme_grey() +
+        ylim(c(y_min, 1))
+
+plot_first <- plot + scale_x_continuous(limits = c(0,length(ns_first)))
+```
+
+```{r}
+plot
+```
+
+```{r}
+data <- rnorm(5000,0,1)
+sw <- shapiro.test(data)
+sw
+```
+
+```{r}
+
+sizes <- c()
+vars <- c()
+avgs <- c()
+
+for (n in ns) {
+  sizes <- append(sizes, n)
+  stats = c()
+  for (i in 1:100) {
+    data <- rnorm(5000,0,1 / sqrt(n))
+    stat <- shapiro.test(data)$statistic
+    
+    stats <- append(stats, stat)
+  }
+  avgs <- append(avgs, mean(stats))
+  vars <- append(vars, var(stats))
+}
+
+min(avgs - 1.96 * vars)
+```
+
+```
+```
+
+
+
+
+
